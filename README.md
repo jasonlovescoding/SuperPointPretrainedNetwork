@@ -1,4 +1,4 @@
-<img src="assets/magicleap.png" width="240">
+<img src="magicleap.png" width="240">
 
 ### Research @ Magic Leap
 

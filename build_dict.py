@@ -15,7 +15,7 @@ from util import read_image
 if __name__ == '__main__':
   # Parse command line arguments.
   parser = argparse.ArgumentParser(description='PyTorch SuperPoint-Based Image Comparison.')
-  parser.add_argument('--data_path', type=str, default='val2014',
+  parser.add_argument('data_path', type=str,
       help='Path to the directory of the dataset')
   parser.add_argument('--save_path', type=str, default='superpoint_v1.npy',
       help='Path to save the dictionary')
@@ -59,7 +59,6 @@ if __name__ == '__main__':
     i += 1
     if i % 100 == 0:
         print('Image iteration reaches {} ...'.format(i))
-        break
   bovw_dict = np.concatenate(bovw_dict, axis=1)
   np.save(opt.save_path, bovw_dict)
   print('==> Successfully built visual dictionary.')
