@@ -51,30 +51,28 @@ import time
 
 import cv2
 import torch
-import sklearn
+import joblib
 import scipy
 
-from .model import SuperPointFrontend
-from .util import read_image
+from model import SuperPointFrontend
+from util import read_image
 
 class SuperPointBackend(object):
 
-  def __init__(self, centers, metrics):
-    self.n_clusters = centers.shape[0]
-    self.clusterer = sklearn.cluster.KMeans(n_clusters=self.n_clusters)
-    self.clusterer.cluster_centers_ = centers
+  def __init__(self, clusterer, metrics):
+    self.clusterer = clusterer
     self.metrics = getattr(scipy.spatial.distance, metrics)
 
   def predict(self, descs):
-    histogram = np.zeros(self.n_clusters)
+    histogram = np.zeros(self.clusterer.n_clusters)
     clusters = self.clusterer.predict(descs)
     for i in clusters:
       histogram[i] += 1
     return histogram
 
   def compare(self, x, y):
-    hx = self.predict(x)
-    hy = self.predict(y)
+    hx = self.predict(x.transpose(1, 0))
+    hy = self.predict(y.transpose(1, 0))
     return self.metrics(hx, hy)
 
 if __name__ == '__main__':
@@ -88,8 +86,8 @@ if __name__ == '__main__':
       help='Metrics of histogram comparison')
   parser.add_argument('--weights_path', type=str, default='superpoint_v1.pth',
       help='Path to pretrained weights file (default: superpoint_v1.pth).')
-  parser.add_argument('--dict_path', type=str, default='superpoint_v1.npy',
-      help='Path to pretrained dictionary file (default: superpoint_v1.npy).')
+  parser.add_argument('--dict_path', type=str, default='superpoint_v1.joblib',
+      help='Path to pretrained dictionary file (default: superpoint_v1.joblib).')
   parser.add_argument('--H', type=int, default=120,
       help='Input image height (default: 120).')
   parser.add_argument('--W', type=int, default=160,
@@ -115,7 +113,7 @@ if __name__ == '__main__':
   print('==> Successfully loaded pre-trained network.')
 
   print('==> Loading pre-trained dictionary.')
-  dictionary = np.load(opt.dict_path)
+  dictionary = joblib.load(opt.dict_path)
   be = SuperPointBackend(dictionary, opt.metrics)
   print('==> Successfully loaded pre-trained dictionary.')
 
@@ -123,15 +121,15 @@ if __name__ == '__main__':
   print('==> Running Comparison.')
 
   # Get the images in grayscale
-  img_x = read_image(opt.base, (opt.H, opt.W)) 
-  img_y = read_image(opt.query, (opt.H, opt.W)) 
+  img_x = read_image(opt.base, (opt.H, opt.W))
+  img_y = read_image(opt.query, (opt.H, opt.W))
 
   # Get points and descriptors.
   pts_x, desc_x, heatmap_x = fe.run(img_x)
   pts_y, desc_y, heatmap_y = fe.run(img_y)
 
   # Compare the descriptors
-  dist = be.compare(desc_x, desc_y) 
+  dist = be.compare(desc_x, desc_y)
   print("Distance: {}".format(dist))
 
   print('==> Finshed Demo.')
