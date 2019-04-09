@@ -56,10 +56,11 @@ class SuperPointNet(torch.nn.Module):
     desc = desc.div(torch.unsqueeze(dn, 1)) # Divide by norm to normalize.
     return semi, desc
 
-class SuperPointFrontend(object):
+class SuperPointFrontend(torch.nn.Module):
   """ Wrapper around pytorch net to help with pre and post image processing. """
   def __init__(self, weights_path, nms_dist, conf_thresh, nn_thresh,
                cuda=False):
+    super(SuperPointFrontend, self).__init__()
     self.name = 'SuperPoint'
     self.cuda = cuda
     self.nms_dist = nms_dist
@@ -106,28 +107,29 @@ class SuperPointFrontend(object):
       nmsed_corners - 3xN numpy matrix with surviving corners.
       nmsed_inds - N length numpy vector with surviving corner indices.
     """
-    grid = np.zeros((H, W)).astype(int) # Track NMS data.
-    inds = np.zeros((H, W)).astype(int) # Store indices of points.
+    grid = torch.zeros((H, W)).int() # Track NMS data.
+    inds = torch.zeros((H, W)).int() # Store indices of points.
     # Sort by confidence and round to nearest int.
-    inds1 = np.argsort(-in_corners[2,:])
+    inds1 = torch.argsort(-in_corners[2,:])
     corners = in_corners[:,inds1]
-    rcorners = corners[:2,:].round().astype(int) # Rounded corners.
+    rcorners = corners[:2,:].round().int() # Rounded corners.
     # Check for edge case of 0 or 1 corners.
     if rcorners.shape[1] == 0:
-      return np.zeros((3,0)).astype(int), np.zeros(0).astype(int)
+      return torch.zeros((3,0)).int(), torch.zeros(0).int()
     if rcorners.shape[1] == 1:
-      out = np.vstack((rcorners, in_corners[2])).reshape(3,1)
-      return out, np.zeros((1)).astype(int)
+      out = torch.cat((rcorners, in_corners[2]), 1).reshape(3,1)
+      return out, torch.zeros((1)).int()
     # Initialize the grid.
-    for i, rc in enumerate(rcorners.T):
+    for i in range(rcorners.shape[1]):
       grid[rcorners[1,i], rcorners[0,i]] = 1
       inds[rcorners[1,i], rcorners[0,i]] = i
     # Pad the border of the grid, so that we can NMS points near the border.
     pad = dist_thresh
-    grid = np.pad(grid, ((pad,pad), (pad,pad)), mode='constant')
+    grid = torch.nn.functional.pad(grid, (pad, pad, pad, pad), mode='constant')
     # Iterate through points, highest to lowest conf, suppress neighborhood.
     count = 0
-    for i, rc in enumerate(rcorners.T):
+    for i in range(rcorners.shape[1]):
+      rc = rcorners[:, i]
       # Account for top and left padding.
       pt = (rc[0]+pad, rc[1]+pad)
       if grid[pt[1], pt[0]] == 1: # If not yet suppressed.
@@ -135,74 +137,71 @@ class SuperPointFrontend(object):
         grid[pt[1], pt[0]] = -1
         count += 1
     # Get all surviving -1's and return sorted array of remaining corners.
-    keepy, keepx = np.where(grid==-1)
+    keepyx = (grid==-1).nonzero()
+    keepy, keepx = keepyx[:, 0], keepyx[:, 1]
     keepy, keepx = keepy - pad, keepx - pad
-    inds_keep = inds[keepy, keepx]
+    inds_keep = inds[keepy, keepx].long()
     out = corners[:, inds_keep]
     values = out[-1, :]
-    inds2 = np.argsort(-values)
+    inds2 = torch.argsort(-values)
     out = out[:, inds2]
     out_inds = inds1[inds_keep[inds2]]
     return out, out_inds
 
-  def run(self, img):
+  def forward(self, img):
     """ Process a numpy image to extract points and descriptors.
     Input
-      img - HxW numpy float32 input image in range [0,1].
+      img - 1x1xHxW numpy float32 input image in range [0,1].
     Output
       corners - 3xN numpy array with corners [x_i, y_i, confidence_i]^T.
       desc - 256xN numpy array of corresponding unit normalized descriptors.
       heatmap - HxW numpy heatmap in range [0,1] of point confidences.
       """
-    assert img.ndim == 2, 'Image must be grayscale.'
-    assert img.dtype == np.float32, 'Image must be float32.'
-    H, W = img.shape[0], img.shape[1]
-    inp = img.copy()
-    inp = (inp.reshape(1, H, W))
-    inp = torch.from_numpy(inp)
-    inp = torch.autograd.Variable(inp).view(1, 1, H, W)
+    H, W = img.shape[2], img.shape[3] 
+    inp = img
     if self.cuda:
       inp = inp.cuda()
     # Forward pass of network.
     outs = self.net.forward(inp)
     semi, coarse_desc = outs[0], outs[1]
-    # Convert pytorch -> numpy.
-    semi = semi.data.cpu().numpy().squeeze()
+    semi = semi.squeeze()
     # --- Process points.
-    dense = np.exp(semi) # Softmax.
-    dense = dense / (np.sum(dense, axis=0)+.00001) # Should sum to 1.
+    dense = torch.exp(semi) # Softmax.
+    dense = dense / (dense.sum(0)+.00001) # Should sum to 1.
     # Remove dustbin.
     nodust = dense[:-1, :, :]
     # Reshape to get full resolution heatmap.
     Hc = int(H / self.cell)
     Wc = int(W / self.cell)
-    nodust = nodust.transpose(1, 2, 0)
-    heatmap = np.reshape(nodust, [Hc, Wc, self.cell, self.cell])
-    heatmap = np.transpose(heatmap, [0, 2, 1, 3])
-    heatmap = np.reshape(heatmap, [Hc*self.cell, Wc*self.cell])
-    xs, ys = np.where(heatmap >= self.conf_thresh) # Confidence threshold.
-    if len(xs) == 0:
-      return np.zeros((3, 0)), None, None
-    pts = np.zeros((3, len(xs))) # Populate point data sized 3xN.
+    nodust = nodust.permute(1, 2, 0)
+    heatmap = nodust.view([Hc, Wc, self.cell, self.cell])
+    heatmap = heatmap.permute(0, 2, 1, 3).contiguous()
+    heatmap = heatmap.view([Hc*self.cell, Wc*self.cell])
+    xys = (heatmap >= self.conf_thresh).nonzero() # Confidence threshold.
+    xs = xys[:, 0]
+    ys = xys[:, 1]
+    if xs.shape[0] == 0:
+      return torch.zeros((3, 0)), None, None
+    pts = torch.zeros((3, xs.shape[0])) # Populate point data sized 3xN.
     pts[0, :] = ys
     pts[1, :] = xs
     pts[2, :] = heatmap[xs, ys]
     pts, _ = self.nms_fast(pts, H, W, dist_thresh=self.nms_dist) # Apply NMS.
-    inds = np.argsort(pts[2,:])
-    pts = pts[:,inds[::-1]] # Sort by confidence.
+    inds = torch.argsort(pts[2,:], descending=True)
+    pts = pts[:,inds] # Sort by confidence.
     # Remove points along border.
     bord = self.border_remove
-    toremoveW = np.logical_or(pts[0, :] < bord, pts[0, :] >= (W-bord))
-    toremoveH = np.logical_or(pts[1, :] < bord, pts[1, :] >= (H-bord))
-    toremove = np.logical_or(toremoveW, toremoveH)
+    toremoveW = (pts[0, :] < bord) | (pts[0, :] >= (W-bord))
+    toremoveH = (pts[1, :] < bord) | (pts[1, :] >= (H-bord))
+    toremove = toremoveW | toremoveH
     pts = pts[:, ~toremove]
     # --- Process descriptor.
     D = coarse_desc.shape[1]
     if pts.shape[1] == 0:
-      desc = np.zeros((D, 0))
+      desc = torch.zeros((D, 0))
     else:
       # Interpolate into descriptor map using 2D point locations.
-      samp_pts = torch.from_numpy(pts[:2, :].copy())
+      samp_pts = pts[:2, :].clone()
       samp_pts[0, :] = (samp_pts[0, :] / (float(W)/2.)) - 1.
       samp_pts[1, :] = (samp_pts[1, :] / (float(H)/2.)) - 1.
       samp_pts = samp_pts.transpose(0, 1).contiguous()
@@ -211,6 +210,6 @@ class SuperPointFrontend(object):
       if self.cuda:
         samp_pts = samp_pts.cuda()
       desc = torch.nn.functional.grid_sample(coarse_desc, samp_pts)
-      desc = desc.data.cpu().numpy().reshape(D, -1)
-      desc /= np.linalg.norm(desc, axis=0)[np.newaxis, :]
+      desc = desc.reshape(D, -1)
+      desc /= torch.norm(desc, dim=0)
     return pts, desc, heatmap

@@ -4,7 +4,7 @@ def read_image(impath, img_size=None):
   """ Read image as grayscale and resize to img_size.
   Inputs
     impath: Path to input image.
-    img_size: (W, H) tuple specifying resize size.
+    img_size: (H, W) tuple specifying resize size.
   Returns
     grayim: float32 numpy array sized H x W with values in range [0, 1].
   """

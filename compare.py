@@ -51,11 +51,11 @@ import time
 
 import cv2
 import torch
-import sklearn
+import sklearn.cluster
 import scipy
 
-from .model import SuperPointFrontend
-from .util import read_image
+from model import SuperPointFrontend
+from util import read_image
 
 class SuperPointBackend(object):
 
@@ -124,14 +124,19 @@ if __name__ == '__main__':
 
   # Get the images in grayscale
   img_x = read_image(opt.base, (opt.H, opt.W)) 
+  inp_x = torch.from_numpy(img_x.reshape(1, img_x.shape[0], img_x.shape[1]))
+  inp_x = torch.autograd.Variable(inp_x).view(1, 1, img_x.shape[0], img_x.shape[1])
+
   img_y = read_image(opt.query, (opt.H, opt.W)) 
+  inp_y = torch.from_numpy(img_y.reshape(1, img_y.shape[0], img_y.shape[1]))
+  inp_y = torch.autograd.Variable(inp_y).view(1, 1, img_y.shape[0], img_y.shape[1])
 
   # Get points and descriptors.
-  pts_x, desc_x, heatmap_x = fe.run(img_x)
-  pts_y, desc_y, heatmap_y = fe.run(img_y)
+  pts_x, desc_x, heatmap_x = fe(inp_x)
+  pts_y, desc_y, heatmap_y = fe(inp_y)
 
   # Compare the descriptors
-  dist = be.compare(desc_x, desc_y) 
+  dist = be.compare(desc_x.data.numpy(), desc_y.data.numpy()) 
   print("Distance: {}".format(dist))
-
+    
   print('==> Finshed Demo.')
